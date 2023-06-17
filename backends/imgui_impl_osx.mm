@@ -433,28 +433,50 @@ bool ImGui_ImplOSX_Init(NSView* view)
     // Since we are already in ObjC land here, it is easy for us to add a clipboard handler using the NSPasteboard api.
     io.SetClipboardTextFn = [](void*, const char* str) -> void
     {
-        NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
-        [pasteboard declareTypes:[NSArray arrayWithObject:NSPasteboardTypeString] owner:nil];
-        [pasteboard setString:[NSString stringWithUTF8String:str] forType:NSPasteboardTypeString];
+        void (*setClipboardText)(const char*) = [](const char* str) -> void {
+            NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
+            [pasteboard declareTypes:[NSArray arrayWithObject:NSPasteboardTypeString] owner:nil];
+            [pasteboard setString:[NSString stringWithUTF8String:str] forType:NSPasteboardTypeString];
+        };
+        
+        if ([NSThread isMainThread])
+            return setClipboardText(str);
+        
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            setClipboardText(str);
+        });
     };
 
     io.GetClipboardTextFn = [](void*) -> const char*
     {
-        NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
-        NSString* available = [pasteboard availableTypeFromArray: [NSArray arrayWithObject:NSPasteboardTypeString]];
-        if (![available isEqualToString:NSPasteboardTypeString])
-            return nullptr;
+        const char* (*getClipboardText)(void) = [](void) -> const char* {
+            NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
+            NSString* available = [pasteboard availableTypeFromArray: [NSArray arrayWithObject:NSPasteboardTypeString]];
+            if (![available isEqualToString:NSPasteboardTypeString])
+                return nullptr;
 
-        NSString* string = [pasteboard stringForType:NSPasteboardTypeString];
-        if (string == nil)
-            return nullptr;
+            NSString* string = [pasteboard stringForType:NSPasteboardTypeString];
+            if (string == nil)
+                return nullptr;
 
-        const char* string_c = (const char*)[string UTF8String];
-        size_t string_len = strlen(string_c);
-        static ImVector<char> s_clipboard;
-        s_clipboard.resize((int)string_len + 1);
-        strcpy(s_clipboard.Data, string_c);
-        return s_clipboard.Data;
+            const char* string_c = (const char*)[string UTF8String];
+            size_t string_len = strlen(string_c);
+            static ImVector<char> s_clipboard;
+            s_clipboard.resize((int)string_len + 1);
+            strcpy(s_clipboard.Data, string_c);
+            return s_clipboard.Data;
+        };
+        
+        if ([NSThread isMainThread])
+            return getClipboardText();
+
+        __block const char* clipboardText;
+        
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            clipboardText = getClipboardText();
+        });
+        
+        return clipboardText;
     };
 
     [[NSNotificationCenter defaultCenter] addObserver:bd->Observer
@@ -475,18 +497,27 @@ bool ImGui_ImplOSX_Init(NSView* view)
 
     io.SetPlatformImeDataFn = [](ImGuiViewport* viewport, ImGuiPlatformImeData* data) -> void
     {
-        ImGui_ImplOSX_Data* bd = ImGui_ImplOSX_GetBackendData();
-        if (data->WantVisible)
-        {
-            [bd->InputContext activate];
-        }
-        else
-        {
-            [bd->InputContext discardMarkedText];
-            [bd->InputContext invalidateCharacterCoordinates];
-            [bd->InputContext deactivate];
-        }
-        [bd->KeyEventResponder setImePosX:data->InputPos.x imePosY:data->InputPos.y + data->InputLineHeight];
+        void (*setPlatformImeData)(ImGuiPlatformImeData*) = [](ImGuiPlatformImeData* data) -> void {
+            ImGui_ImplOSX_Data* bd = ImGui_ImplOSX_GetBackendData();
+            if (data->WantVisible)
+            {
+                [bd->InputContext activate];
+            }
+            else
+            {
+                [bd->InputContext discardMarkedText];
+                [bd->InputContext invalidateCharacterCoordinates];
+                [bd->InputContext deactivate];
+            }
+            [bd->KeyEventResponder setImePosX:data->InputPos.x imePosY:data->InputPos.y + data->InputLineHeight];
+        };
+        
+        if ([NSThread isMainThread])
+            return setPlatformImeData(data);
+        
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            setPlatformImeData(data);
+        });
     };
 
     return true;
