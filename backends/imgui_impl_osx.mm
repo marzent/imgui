@@ -94,6 +94,7 @@ static void ImGui_ImplOSX_ShutdownPlatformInterface();
 static void ImGui_ImplOSX_UpdateMonitors();
 static void ImGui_ImplOSX_AddTrackingArea(NSView* _Nonnull view);
 static bool ImGui_ImplOSX_HandleEvent(NSEvent* event, NSView* view);
+static void ImGui_ImplOSX_SetupDisplaySize(NSView* view);
 
 // Undocumented methods for creating cursors.
 @interface NSCursor()
@@ -396,7 +397,7 @@ IMGUI_IMPL_API void ImGui_ImplOSX_NewFrame(void* _Nullable view) {
 #endif
 
 
-bool ImGui_ImplOSX_Init(NSView* view)
+bool ImGui_ImplOSX_InitInternal(NSView* view)
 {
     ImGuiIO& io = ImGui::GetIO();
     ImGui_ImplOSX_Data* bd = ImGui_ImplOSX_CreateBackendData();
@@ -515,12 +516,28 @@ bool ImGui_ImplOSX_Init(NSView* view)
         if ([NSThread isMainThread])
             return setPlatformImeData(data);
         
-        dispatch_sync(dispatch_get_main_queue(), ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
             setPlatformImeData(data);
         });
     };
 
+    ImGui_ImplOSX_SetupDisplaySize(view);
+
     return true;
+}
+
+bool ImGui_ImplOSX_Init(NSView* view)
+{
+    if ([NSThread isMainThread])
+        return ImGui_ImplOSX_InitInternal(view);
+    
+    __block bool ret;
+    
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        ret = ImGui_ImplOSX_InitInternal(view);
+    });
+    
+    return ret;
 }
 
 void ImGui_ImplOSX_Shutdown()
@@ -629,18 +646,22 @@ static void ImGui_ImplOSX_UpdateImePosWithView(NSView* view)
         [bd->KeyEventResponder updateImePosWithView:view];
 }
 
-void ImGui_ImplOSX_NewFrame(NSView* view)
+void ImGui_ImplOSX_SetupDisplaySize(NSView* view)
 {
-    ImGui_ImplOSX_Data* bd = ImGui_ImplOSX_GetBackendData();
     ImGuiIO& io = ImGui::GetIO();
-
-    // Setup display size
+    
     if (view)
     {
         const float dpi = (float)[view.window backingScaleFactor];
         io.DisplaySize = ImVec2((float)view.bounds.size.width, (float)view.bounds.size.height);
         io.DisplayFramebufferScale = ImVec2(dpi, dpi);
     }
+}
+
+void ImGui_ImplOSX_NewFrame(NSView* view)
+{
+    ImGui_ImplOSX_Data* bd = ImGui_ImplOSX_GetBackendData();
+    ImGuiIO& io = ImGui::GetIO();
 
     // Setup time step
     if (bd->Time == 0.0)
@@ -649,10 +670,13 @@ void ImGui_ImplOSX_NewFrame(NSView* view)
     double current_time = GetMachAbsoluteTimeInSeconds();
     io.DeltaTime = (float)(current_time - bd->Time);
     bd->Time = current_time;
-
-    ImGui_ImplOSX_UpdateMouseCursor();
-    ImGui_ImplOSX_UpdateGamepads();
-    ImGui_ImplOSX_UpdateImePosWithView(view);
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ImGui_ImplOSX_SetupDisplaySize(view);
+        ImGui_ImplOSX_UpdateMouseCursor();
+        ImGui_ImplOSX_UpdateGamepads();
+        ImGui_ImplOSX_UpdateImePosWithView(view);
+    });
 }
 
 // Must only be called for a mouse event, otherwise an exception occurs
@@ -843,6 +867,11 @@ static void ImGui_ImplOSX_AddTrackingArea(NSView* _Nonnull view)
                                                         handler:^NSEvent* _Nullable(NSEvent* event)
     {
         ImGui_ImplOSX_HandleEvent(event, view);
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureMouse && [event type] != NSEventTypeKeyDown && [event type] != NSEventTypeKeyUp && [event type] != NSEventTypeFlagsChanged) {
+            CGAssociateMouseAndMouseCursorPosition(true);
+            return nil;
+        }
         return event;
     }];
 }
