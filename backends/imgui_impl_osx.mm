@@ -516,7 +516,7 @@ bool ImGui_ImplOSX_InitInternal(NSView* view)
         if ([NSThread isMainThread])
             return setPlatformImeData(data);
         
-        dispatch_async(dispatch_get_main_queue(), ^{
+        dispatch_sync(dispatch_get_main_queue(), ^{
             setPlatformImeData(data);
         });
     };
